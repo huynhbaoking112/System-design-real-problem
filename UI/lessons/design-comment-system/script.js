@@ -1,4 +1,5 @@
 const tocLinks = document.querySelectorAll(".toc a");
+const scrollProgress = document.querySelector(".scroll-progress");
 
 function setActiveTocLink() {
   let activeSectionId = null;
@@ -18,5 +19,20 @@ function setActiveTocLink() {
   });
 }
 
-setActiveTocLink();
-window.addEventListener("scroll", setActiveTocLink, { passive: true });
+function setScrollProgress() {
+  if (!scrollProgress) return;
+
+  const scrollableHeight = document.documentElement.scrollHeight - window.innerHeight;
+  const progress = scrollableHeight > 0 ? (window.scrollY / scrollableHeight) * 100 : 0;
+
+  scrollProgress.style.width = `${Math.min(progress, 100)}%`;
+}
+
+function syncPageState() {
+  setActiveTocLink();
+  setScrollProgress();
+}
+
+syncPageState();
+window.addEventListener("scroll", syncPageState, { passive: true });
+window.addEventListener("resize", setScrollProgress);

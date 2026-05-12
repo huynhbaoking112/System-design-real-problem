@@ -7,21 +7,67 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div class="scroll-progress" aria-hidden="true"></div>
     <main class="page-shell">
       <a class="back-link" href="../../index.html">Back to lessons</a>
 
       <header class="article-hero">
-        <p class="eyebrow">System design lesson</p>
-        <h1>Design Comment System</h1>
-        <p class="hero-copy">
-          A long-form walkthrough for designing a large-scale comment system with comment submission, replies, voting, moderation, caching, database scaling, and peak traffic handling.
-        </p>
-        <div class="meta-row">
-          <span>Completed</span>
-          <span>Medium</span>
-          <span>MongoDB</span>
-          <span>Redis</span>
-          <span>Rate Limiting</span>
+        <div class="hero-content">
+          <p class="eyebrow">System design lesson</p>
+          <h1>Design Comment System</h1>
+          <p class="hero-copy">
+            A long-form walkthrough for designing a large-scale comment system with comment submission, replies, voting, moderation, caching, database scaling, and peak traffic handling.
+          </p>
+          <div class="meta-row">
+            <span>Completed</span>
+            <span>Medium</span>
+            <span>MongoDB</span>
+            <span>Redis</span>
+            <span>Rate Limiting</span>
+          </div>
+          <div class="hero-actions" aria-label="Lesson highlights">
+            <a href="#high-level-design">Explore architecture</a>
+            <a href="#api-design">Review API surface</a>
+          </div>
+        </div>
+
+        <div class="hero-console" aria-label="Comment system capability overview">
+          <div class="console-topbar">
+            <span></span><span></span><span></span>
+            <strong>comment-service.live</strong>
+          </div>
+          <div class="signal-card primary-signal">
+            <span class="signal-label">Peak-safe write path</span>
+            <strong>Auth -> Queue -> Spam Check -> DB</strong>
+            <small>Backpressure, moderation, and durable writes before fanout.</small>
+          </div>
+          <div class="metric-grid">
+            <div>
+              <span>Cache TTL</span>
+              <strong>Short</strong>
+            </div>
+            <div>
+              <span>Pagination</span>
+              <strong>Cursor</strong>
+            </div>
+            <div>
+              <span>Scale Unit</span>
+              <strong>Topic</strong>
+            </div>
+            <div>
+              <span>Storage</span>
+              <strong>10 years</strong>
+            </div>
+          </div>
+          <div class="flow-strip" aria-hidden="true">
+            <span>Client</span>
+            <span>LB</span>
+            <span>Service</span>
+            <span>Redis</span>
+            <span>MongoDB</span>
+          </div>
         </div>
       </header>
 
