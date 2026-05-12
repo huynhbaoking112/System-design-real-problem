@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Design Comment System</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <a class="back-link" href="../../index.html">Back to lessons</a>
+
+      <header class="article-hero">
+        <p class="eyebrow">System design lesson</p>
+        <h1>Design Comment System</h1>
+        <p class="hero-copy">
+          A long-form walkthrough for designing a large-scale comment system with comment submission, replies, voting, moderation, caching, database scaling, and peak traffic handling.
+        </p>
+        <div class="meta-row">
+          <span>Completed</span>
+          <span>Medium</span>
+          <span>MongoDB</span>
+          <span>Redis</span>
+          <span>Rate Limiting</span>
+        </div>
+      </header>
+
+      <div class="article-layout">
+        <aside class="toc" aria-label="Table of contents">
+          <strong>Contents</strong>
+          <a href="#api-design">API Endpoint Design</a>
+          <a href="#post-comment">POST /comment</a>
+          <a href="#get-comments">GET comments</a>
+          <a href="#reply-comment">Reply to comment</a>
+          <a href="#vote-comment">Voting</a>
+          <a href="#moderation">Moderation</a>
+          <a href="#high-level-design">High-Level Design</a>
+          <a href="#detailed-design">Detailed Design</a>
+          <a href="#data-schema">Data Schema</a>
+          <a href="#partitioning">Partitioning</a>
+          <a href="#replication">Replication</a>
+          <a href="#retention">Retention</a>
+          <a href="#cache">Cache</a>
+          <a href="#analytics">Analytics</a>
+          <a href="#follow-up">Follow-Up</a>
+        </aside>
+
+        <article class="post">
+          <section id="api-design" class="post-section">
+            <p class="section-label">Part 1</p>
+            <h2>API Endpoint Design</h2>
+            <p>
+              The system will feature API endpoints designed for submitting and displaying comments, responding to comments, and utilizing moderation tools. Each of these endpoints will have a specific request and response format.
+            </p>
+          </section>
+
+          <section id="post-comment" class="post-section endpoint-section">
+            <h3><code>POST /comment</code></h3>
+            <h4>Request Body</h4>
+            <pre><code>{
+  "content": "" // the content of comment
+}</code></pre>
+            <h4>Response Body</h4>
+            <pre><code>{
+  "status": "success" | "failed",
+  "message": "", // string
+  "comment": {
+    "id": "generated_id",
+    "content": "the-content-of-the-content",
+    "posterId": "the-user-id-of-poster",
+    "posterName": "The display name of poster",
+    "postTime": "2022-01-01T12:00:00Z"
+  }
+}</code></pre>
+          </section>
+
+          <section id="get-comments" class="post-section endpoint-section">
+            <h3><code>GET /{topic_id}/comments?cursor={last_timestamp}&amp;size={size}</code></h3>
+            <p>This API endpoint returns data sorted in descending order, from the most recent to the oldest.</p>
+            <h4>Path Variables</h4>
+            <ul>
+              <li><code>topic_id</code>: The variable <code>topic_id</code> is typically associated with a specific page in a one-to-one relationship. By inputting the relevant <code>topic_id</code> of the page, you can retrieve the comments related to that page.</li>
+            </ul>
+            <h4>Request Parameters</h4>
+            <ul>
+              <li><code>last_timestamp</code>: This parameter is used to query the timestamp of the last comment from the previous list. If you're retrieving data from the first page, this parameter should not be set.</li>
+              <li><code>size</code>: This parameter determines the number of lists retrieved at once. The default value is 20, but it can be set to a maximum of 50.</li>
+            </ul>
+            <h4>Response Body</h4>
+            <pre><code>{
+  "status": "success" | "failed",
+  "total": 12345, // The total count of comments of the specified topic.
+  "data": [ // If there are no comments, then this is an empty array.
+    {
+      "id": "the-id-of-the-comment",
+      "content": "The content of comment",
+      "posterId": "the-user-id-of-poster",
+      "posterName": "The display name of poster",
+      "postTime": "2022-01-01T12:00:00Z",
+      "upvoteCount": 123,
+      "downvoteCount": 12,
+      "repliedCommentId": "the-id-of-replied-comment" | undefined
+    },
+    ...
+  ]
+}</code></pre>
+          </section>
+
+          <section id="reply-comment" class="post-section endpoint-section">
+            <h3><code>POST /comment/{comment_id}/reply</code></h3>
+            <h4>Path Variables</h4>
+            <ul>
+              <li><code>comment_id</code>: The id of replied comment.</li>
+            </ul>
+            <h4>Request Body</h4>
+            <pre><code>{
+  "content": "" // the content of comment
+}</code></pre>
+            <h4>Response Body</h4>
+            <pre><code>{
+  "status": "success" | "failed",
+  "message": "", // string
+  "comment": {
+    "id": "generated_id",
+    "content": "the-content-of-the-content",
+    "posterId": "the-user-id-of-poster",
+    "posterName": "The display name of poster",
+    "postTime": "2022-01-01T12:00:00Z",
+    "repliedCommentId": "the-id-of-replied-comment"
+  }
+}</code></pre>
+          </section>
+
+          <section id="vote-comment" class="post-section endpoint-section">
+            <h3>Voting APIs</h3>
+            <h4><code>PUT /comment/{comment_id}/upvote</code></h4>
+            <ul>
+              <li><code>comment_id</code>: The upvoted comment id.</li>
+            </ul>
+            <pre><code>{
+  "status": "success" | "failed",
+  "message": "" // string
+}</code></pre>
+            <h4><code>PUT /comment/{comment_id}/downvote</code></h4>
+            <ul>
+              <li><code>comment_id</code>: The downvoted comment id.</li>
+            </ul>
+            <pre><code>{
+  "status": "success" | "failed",
+  "message": "" // string
+}</code></pre>
+          </section>
+
+          <section id="moderation" class="post-section endpoint-section">
+            <h3><code>DELETE /admin/comment/{comment_id}</code></h3>
+            <h4>Path Variables</h4>
+            <ul>
+              <li><code>comment_id</code>: The ID of the comment to be deleted.</li>
+            </ul>
+            <h4>Response Body</h4>
+            <pre><code>{
+  "status": "success" | "failed",
+  "message": "" // string
+}</code></pre>
+          </section>
+
+          <section id="high-level-design" class="post-section">
+            <p class="section-label">Part 2</p>
+            <h2>High-Level Design</h2>
+            <figure>
+              <img src="../../../Design%20Comment%20System/assets/highleveldesign.png" alt="High-level comment system design" />
+              <figcaption>High-level architecture for the Comment Service.</figcaption>
+            </figure>
+            <p>
+              The Comment Service is designed to execute essential business operations using a stateless approach. This design allows for easy cluster expansion deployment, making it an ideal solution for handling high levels of concurrency.
+            </p>
+            <ul>
+              <li>The client sends a request to the server.</li>
+              <li>Upon receiving a request, the server first directs it through a load balancer before it reaches the Comment Service. This ensures efficient distribution of network traffic.</li>
+              <li>For retrieval operations, the Comment Service initially attempts to fetch data from the Cache. If successful, the data is read directly from the Cache.</li>
+              <li>If the Cache does not contain the requested data, the Comment Service then queries the Comment Database. The result is subsequently returned to the client and simultaneously written back into the cache for future reference.</li>
+              <li>Write operations require an initial request to the User Authentication Service to validate permissions. This step ensures that only authorized users can modify the data.</li>
+              <li>If the user does not have the necessary permissions, the request is denied and the client is notified.</li>
+              <li>Once the user's permissions have been verified and approved, modifications can be made to the Comment Database.</li>
+            </ul>
+          </section>
+
+          <section id="detailed-design" class="post-section">
+            <p class="section-label">Part 3</p>
+            <h2>Detailed Design</h2>
+            <h3>Data Store</h3>
+            <h4>Database Type</h4>
+            <p>
+              We propose using either SQL or NoSQL databases for the Comment Database, with a preference for NoSQL databases due to their high performance, high availability, and easy scalability. For the purpose of this demonstration, we will use MongoDB, a popular NoSQL database.
+            </p>
+            <p>
+              For the User Database, we recommend using a Relational Database Management System such as PostgreSQL or MySQL. These databases are adept at handling structured data and offer strong consistency, a critical factor for user authentication.
+            </p>
+          </section>
+
+          <section id="data-schema" class="post-section">
+            <h3>Data Schema</h3>
+            <p>The Comment Database will comprise topics, comments, upvotes and downvotes collections. The topics collection will include the following fields:</p>
+            <pre><code>{
+  "_id": ObjectId("..."),
+  "topic_id": "the-topic-id",
+  "total_count": 12345, // The total count of comments of the topic.
+}</code></pre>
+            <p>The comments collection as below:</p>
+            <pre><code>{
+  "_id": ObjectId("..."), // as comment_id
+  "content": "The content of comment",
+  "user_id": "user_id", // indexed
+  "topic_id": "topic_id", // indexed
+  "replied_comment_id": "",
+  "upvote_count": 123,
+  "downvote_count": 12,
+  "timestamp": ISODate("...")
+}</code></pre>
+            <p>The upvotes collection as below:</p>
+            <pre><code>{
+  "_id": ObjectId("..."),
+  "topic_id": "topic_id",
+  "comment_id": "comment_id", // indexed
+  "user_id": "user_id", // indexed
+  "timestamp": ISODate("...")
+}</code></pre>
+            <p>The downvotes collection as follows:</p>
+            <pre><code>{
+  "_id": ObjectId("..."),
+  "topic_id": "topic_id",
+  "comment_id": "comment_id", // indexed
+  "user_id": "user_id", // indexed
+  "timestamp": ISODate("...")
+}</code></pre>
+            <p>The User Database will have a users table with fields as below:</p>
+            <table>
+              <thead>
+                <tr><th>Field Name</th><th>Data Type</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>user_id</code></td><td><code>string</code></td></tr>
+                <tr><td><code>username</code></td><td><code>string</code></td></tr>
+                <tr><td><code>role</code></td><td><code>"admin"</code> or <code>"normal"</code></td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section id="partitioning" class="post-section">
+            <h3>Database Partitioning</h3>
+            <p>
+              To handle the large volume of data, we can use horizontal partitioning (sharding). We can shard the comments, upvotes and downvotes collections by <code>topic_id</code>. This way, data modification operations, such as upvotes and downvotes, are transactionally controlled on a single partition, with data from different topics spread across multiple nodes, reducing the load on each node and improving performance.
+            </p>
+          </section>
+
+          <section id="replication" class="post-section">
+            <h3>Database Replication</h3>
+            <p>
+              To ensure high availability and data durability, we can use database replication. Each write operation is performed on the primary database and then replicated to one or more secondary databases. If the primary database fails, one of the secondary databases can take over.
+            </p>
+            <p>
+              MongoDB supports replication natively through replica sets. The primary node receives all write operations, and all other nodes are secondary nodes that replicate the primary node's data set.
+            </p>
+            <p>
+              By default, MongoDB reads and writes are on the primary node. We can set the read preference to secondary to reduce read pressure, accepting briefly outdated data because the Comment System can rely on eventual consistency.
+            </p>
+          </section>
+
+          <section id="retention" class="post-section">
+            <h3>Data Retention and Cleanup</h3>
+            <p>
+              Based on the requirement for 10 years of data retention, we need to implement a data cleanup strategy. MongoDB supports Time-To-Live indexes, which can automatically delete expired data from the database.
+            </p>
+            <pre><code>use commentDatabaseName; // Specify comments database name
+db.comments.createIndex({ "timestamp": 1 }, { expireAfterSeconds: 315360000 })</code></pre>
+          </section>
+
+          <section id="cache" class="post-section">
+            <h3>Cache</h3>
+            <p>
+              To improve read performance and reduce database pressure, we can use a cache like Redis. Comments related to a specific topic typically do not change often, so after each database query, the data can be stored in cache with a short TTL.
+            </p>
+            <p>
+              If the client requests the same content within the TTL timeframe, the Comment Service retrieves the data from cache and avoids an extra database query. Once the TTL expires, the cache is cleared and the database is queried again.
+            </p>
+          </section>
+
+          <section id="analytics" class="post-section">
+            <h3>Analytics</h3>
+            <p>To track user behavior and system performance, we can use an analytics system like Google Analytics or a custom-built analytics system.</p>
+            <ul>
+              <li><strong>User Behavior Metrics:</strong> Number of comments posted, number of upvotes/downvotes, number of replies, etc.</li>
+              <li><strong>System Performance Metrics:</strong> Response time, error rates, cache hit/miss ratio, etc.</li>
+              <li><strong>Business Metrics:</strong> Daily active users, user growth rate, user retention rate, etc.</li>
+            </ul>
+            <p>
+              The analytics data can be stored in a separate analytics database, such as Redshift or BigQuery. Real-time analytics tools like Apache Kafka or Amazon Kinesis can process and analyze data in real time.
+            </p>
+          </section>
+
+          <section id="follow-up" class="post-section">
+            <p class="section-label">Part 4</p>
+            <h2>Follow-Up Detailed Design Questions and Answers</h2>
+
+            <h3>How to Cache Pagination Data?</h3>
+            <p>
+              The interface <code>GET /{topic_id}/comments?cursor={last_timestamp}&amp;size={size}</code> is utilized to paginate the comment queries for a specific topic. The results are stored in cache using a combination of <code>topic_id</code>, <code>last_timestamp</code>, and <code>size</code> as the key.
+            </p>
+            <pre><code>{topic_id}:{last_timestamp}:{size}
+{topic_id}:{0}:{size} # Set to 0 when last_timestamp is not available
+
+example-topic1:1692278954682:20
+# Here, topic_id is "example-topic1"
+#     last_timestamp is "1692278954682"
+#     size is "20"</code></pre>
+            <p>If we need to clear the cache for a specific topic, we can locate and delete based on the first part of the key, which is the <code>topic_id</code>.</p>
+
+            <h3>How to Avoid Duplicate Data When Switching Page?</h3>
+            <p>
+              This issue happens when new data is inserted while a client is viewing paginated data, leading to duplicate data at the intersection of two pages.
+            </p>
+            <figure>
+              <img src="../../../Design%20Comment%20System/assets/duplicated-item.png" alt="Duplicate item caused by offset pagination" />
+              <figcaption>Cursor pagination avoids duplicate records when new comments arrive.</figcaption>
+            </figure>
+            <p>
+              This is avoided in the design of the <code>GET /{topic_id}/comments?cursor={last_timestamp}&amp;size={size}</code> interface. The backend service queries data where <code>timestamp &lt; last_timestamp</code> each time, preventing duplicate data.
+            </p>
+
+            <h3>How to Handle Peak Traffic?</h3>
+            <p>Handling peak traffic is a common challenge for any large-scale system. Here are some strategies:</p>
+            <ul>
+              <li><strong>Queueing:</strong> Place excess requests in a message queue so they can be processed when resources become available.</li>
+              <li><strong>Rate Limiting &amp; Throttling:</strong> Control how frequently a user, client, or IP address can send requests.</li>
+              <li><strong>Auto-scaling:</strong> Automatically scale server and database capacity based on traffic load.</li>
+              <li><strong>Autoscaling Load Balancing:</strong> Adjust load balancer capacity to distribute network traffic efficiently.</li>
+              <li><strong>Caching:</strong> Reuse stored request results to reduce database pressure.</li>
+            </ul>
+            <figure>
+              <img src="../../../Design%20Comment%20System/assets/diagram-using-mq.png" alt="Message queue design" />
+              <figcaption>Queue-based buffering for peak traffic.</figcaption>
+            </figure>
+            <figure>
+              <img src="../../../Design%20Comment%20System/assets/diagram-with-rate-limiting.png" alt="Rate limiting design" />
+              <figcaption>Rate limiter service before the Comment Service.</figcaption>
+            </figure>
+
+            <h3>How to Handle Spam Comments?</h3>
+            <p>
+              We can use a spam detection system that uses machine learning algorithms to identify and block spam comments. The Spam Check can be integrated as an independent service, with the addition of a <code>spam_comments</code> collection to the Comment Database.
+            </p>
+            <p>
+              When new comments are identified as spam, they are not saved in the main comments collection. Instead, they are saved in the <code>spam_comments</code> collection so administrators can review, label them as non-spam, and move them back to the comments collection.
+            </p>
+            <figure>
+              <img src="../../../Design%20Comment%20System/assets/diagram-with-spam-check.png" alt="Spam check design" />
+              <figcaption>Spam Check Service integrated into the comment write path.</figcaption>
+            </figure>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>

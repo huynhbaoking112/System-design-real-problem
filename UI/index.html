@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>System Design Learning Portal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Personal learning workspace</p>
+          <h1>System Design Notes, Rebuilt as Lessons</h1>
+          <p class="hero-copy">
+            A visual dashboard for the system design problems you are studying, with clean lesson pages instead of raw Markdown files.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <span class="metric-value" id="lesson-count">0</span>
+          <span class="metric-label">lessons tracked</span>
+        </div>
+      </section>
+
+      <section class="toolbar" aria-label="Lesson filters">
+        <div>
+          <p class="section-kicker">Library</p>
+          <h2>Current Lessons</h2>
+        </div>
+        <input id="search-input" type="search" placeholder="Search lessons..." aria-label="Search lessons" />
+      </section>
+
+      <section class="lesson-grid" id="lesson-grid" aria-live="polite"></section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
