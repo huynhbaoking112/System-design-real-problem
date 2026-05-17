@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Design Spotify Top K Songs</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="glow glow-one" aria-hidden="true"></div>
+    <div class="glow glow-two" aria-hidden="true"></div>
+    <div class="scroll-progress" aria-hidden="true"></div>
+
+    <main class="page-shell">
+      <a class="back-link" href="../../index.html">Back to lessons</a>
+
+      <header class="hero">
+        <section class="hero-copy-block">
+          <p class="eyebrow">System design lesson</p>
+          <h1>Design Spotify Top K Songs</h1>
+          <p class="hero-copy">
+            Build a real-time Top K system for music plays, starting from one in-memory heap and scaling into partitioned workers, snapshots, sliding windows, and bucket-based exact rankings.
+          </p>
+          <div class="meta-row">
+            <span>Completed</span>
+            <span>Hard</span>
+            <span>Stream Processing</span>
+            <span>Top K</span>
+            <span>Sliding Window</span>
+          </div>
+          <div class="hero-actions" aria-label="Lesson shortcuts">
+            <a href="#bucket-window">Study bucket window</a>
+            <a href="#high-qps">Scale high QPS</a>
+          </div>
+        </section>
+
+        <aside class="rank-panel" aria-label="Top K signal overview">
+          <div class="panel-topbar">
+            <span></span><span></span><span></span>
+            <strong>top-k.stream</strong>
+          </div>
+          <div class="now-playing">
+            <span class="signal-label">Current design target</span>
+            <strong>Top 100 songs in 1h</strong>
+            <small>Partitioned by song_id, aggregated per worker, merged by coordinator.</small>
+          </div>
+          <div class="metric-grid">
+            <div><span>Plays/day</span><strong>10B</strong></div>
+            <div><span>Songs</span><strong>100M</strong></div>
+            <div><span>API/day</span><strong>1M</strong></div>
+            <div><span>K range</span><strong>100-1000</strong></div>
+          </div>
+          <div class="mini-ranking" aria-label="Example ranking">
+            <div><b>01</b><span>song_1842</span><strong>981k</strong></div>
+            <div><b>02</b><span>song_7721</span><strong>964k</strong></div>
+            <div><b>03</b><span>song_0935</span><strong>901k</strong></div>
+          </div>
+        </aside>
+      </header>
+
+      <div class="article-layout">
+        <aside class="toc" aria-label="Table of contents">
+          <strong>Contents</strong>
+          <a href="#problem">Problem</a>
+          <a href="#requirements">Requirements</a>
+          <a href="#windows">Window types</a>
+          <a href="#api">API</a>
+          <a href="#low-qps">Global low QPS</a>
+          <a href="#high-qps">Global high QPS</a>
+          <a href="#recovery">Recovery</a>
+          <a href="#sliding-window">Sliding window</a>
+          <a href="#bucket-window">Bucket implementation</a>
+          <a href="#approximate">Approximate results</a>
+        </aside>
+
+        <article class="post">
+          <section id="problem" class="post-section">
+            <p class="section-label">Part 1</p>
+            <h2>Problem Statement</h2>
+            <p>
+              Every time a user plays a song, the service records a play event. The goal is to expose the top K most played songs. The lesson starts with all-time rankings, then increases complexity with high throughput and sliding time windows.
+            </p>
+            <div class="callout-grid">
+              <div class="callout"><strong>Global window</strong><span>Top K across all historical play events.</span></div>
+              <div class="callout"><strong>Sliding window</strong><span>Top K inside the last X minutes, hours, or days.</span></div>
+              <div class="callout"><strong>High QPS</strong><span>Partition stream events and merge local rankings.</span></div>
+            </div>
+          </section>
+
+          <section id="requirements" class="post-section">
+            <p class="section-label">Part 2</p>
+            <h2>Requirements</h2>
+            <div class="split-grid">
+              <div>
+                <h3>Functional</h3>
+                <ul>
+                  <li>Return the top K most played songs of all time on a single instance.</li>
+                  <li>Return the all-time top K when play traffic is high and the system must scale out.</li>
+                  <li>Return the top K songs in the last X time using a sliding window.</li>
+                </ul>
+              </div>
+              <div>
+                <h3>Scale and quality</h3>
+                <ul>
+                  <li>10 billion song plays per day.</li>
+                  <li>100 million songs.</li>
+                  <li>Top K API receives about 1 million requests per day.</li>
+                  <li>K is usually between 100 and 1000.</li>
+                  <li>Low latency and high accuracy are preferred.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="windows" class="post-section">
+            <h2>Window Types</h2>
+            <div class="window-grid">
+              <article>
+                <h3>Global</h3>
+                <pre><code>0      5      10     15     20
+[-----------------------------]</code></pre>
+                <p>All events belong to one forever-growing window. Counts only increase.</p>
+              </article>
+              <article>
+                <h3>Tumbling</h3>
+                <pre><code>[---- W1 ----][---- W2 ----]</code></pre>
+                <p>Fixed, non-overlapping windows. Useful for daily or hourly charts.</p>
+              </article>
+              <article>
+                <h3>Sliding</h3>
+                <pre><code>[---- W1 ----]
+   [---- W2 ----]
+      [---- W3 ----]</code></pre>
+                <p>The window moves forward. New events enter and old events expire.</p>
+              </article>
+            </div>
+          </section>
+
+          <section id="api" class="post-section endpoint-section">
+            <p class="section-label">Part 3</p>
+            <h2>API Endpoint</h2>
+            <h3><code>GET /top-items?k=100&amp;time_window=1d</code></h3>
+            <p>
+              Returns the top K most played songs in the requested time window. If <code>time_window</code> is omitted, the API returns all-time top K.
+            </p>
+            <pre><code>{
+  "items": [
+    { "id": "song_123", "count": 981234 }
+  ]
+}</code></pre>
+          </section>
+
+          <section id="low-qps" class="post-section">
+            <p class="section-label">Part 4</p>
+            <h2>Global Window, Low QPS</h2>
+            <p>
+              A single instance can maintain all-time top K with a hash map for counts and a min heap for ranking. The heap head is the least played song among the current top K.
+            </p>
+            <figure>
+              <img src="../../../Design%20Spotify%20Top%20K%20Songs/assets/1.png" alt="Global window top K data structure" />
+              <figcaption>Hash map plus min heap for maintaining all-time top K on one instance.</figcaption>
+            </figure>
+            <h3>How the single-instance version works</h3>
+            <p>
+              In the all-time version, a song's count only moves upward. That makes the data structure simple: the hash map is the source of truth for counts, and the min heap is just a compact index of the current top K songs.
+            </p>
+            <ul>
+              <li><code>song_counts</code> stores total plays per song.</li>
+              <li>The min heap stores the current top K candidates.</li>
+              <li>The hash map can store heap index metadata to update heap entries in <code>O(log K)</code>.</li>
+            </ul>
+            <div class="explain-panel">
+              <h3>Example update</h3>
+              <p>
+                If <code>songA</code> receives a new play, the service first increments <code>song_counts[songA]</code>. If <code>songA</code> is already in the heap, we update its heap entry and re-heapify. If it is not in the heap, we compare its count with the heap root. Only when it beats the current smallest top-K item do we replace the root.
+              </p>
+              <pre><code>song_counts[songA] += 1
+
+if songA is in heap:
+  update heap node and reheapify
+else if song_counts[songA] &gt; heap.min.count:
+  replace heap.min with songA</code></pre>
+            </div>
+          </section>
+
+          <section id="high-qps" class="post-section">
+            <p class="section-label">Part 5</p>
+            <h2>Global Window, High QPS</h2>
+            <p>
+              To scale throughput, partition events by <code>song_id</code>. This keeps all plays for the same song on the same worker, avoiding split counts and simplifying local aggregation.
+            </p>
+            <p>
+              This section is still solving the all-time Top K problem. The difference from the previous section is traffic: one machine cannot process all play events, so we divide the stream into partitions and let many workers maintain local rankings in parallel.
+            </p>
+            <div class="flow-card">
+              <span>Play Events</span>
+              <span>Stream</span>
+              <span>hash(song_id)</span>
+              <span>Workers</span>
+              <span>Coordinator</span>
+              <span>Cache</span>
+            </div>
+            <div class="split-grid">
+              <div>
+                <h3>Worker responsibility</h3>
+                <ul>
+                  <li>Consume assigned stream partitions.</li>
+                  <li>Maintain local song counts.</li>
+                  <li>Maintain local top K for its partition.</li>
+                </ul>
+              </div>
+              <div>
+                <h3>Coordinator responsibility</h3>
+                <ul>
+                  <li>Collect local top K from workers.</li>
+                  <li>Merge <code>num_workers * K</code> candidates.</li>
+                  <li>Publish global top K to cache for fast API reads.</li>
+                </ul>
+              </div>
+            </div>
+            <h3>Why partition by <code>song_id</code>?</h3>
+            <p>
+              If events are distributed round-robin, the same song can be processed by multiple workers. Then no worker knows the full count for that song. By hashing <code>song_id</code>, every play for the same song always lands on the same worker, so each worker has exact local counts for its assigned songs.
+            </p>
+            <pre><code>partition = hash(song_id) % num_partitions
+
+songA -&gt; worker 1
+songB -&gt; worker 3
+songC -&gt; worker 2</code></pre>
+            <h3>How global Top K is produced</h3>
+            <p>
+              Each worker exposes only its local top K. The coordinator does not need to scan every song in the system. It merges the candidates from all workers and keeps the highest K items globally.
+            </p>
+            <pre><code>worker_1_top_k + worker_2_top_k + ... + worker_n_top_k
+  -&gt; coordinator merge
+  -&gt; global top K
+  -&gt; Redis cache
+  -&gt; API reads cached result</code></pre>
+          </section>
+
+          <section id="recovery" class="post-section">
+            <h2>Snapshot Recovery</h2>
+            <p>
+              Since heaps and hash maps live in memory, each worker periodically snapshots its state and stream offset. After a crash, the worker restores the snapshot and replays events from the saved offset.
+            </p>
+            <figure>
+              <img src="../../../Design%20Spotify%20Top%20K%20Songs/assets/2.png" alt="Snapshot recovery for partitioned top K" />
+              <figcaption>Snapshot heap, counts, and stream offset to recover without replaying from the beginning.</figcaption>
+            </figure>
+            <h3>What is stored in a snapshot?</h3>
+            <ul>
+              <li><strong>Heap data:</strong> the current local top K state for that worker.</li>
+              <li><strong>Count map:</strong> current counts for songs owned by that worker.</li>
+              <li><strong>Stream offset:</strong> the last event position already processed by the worker.</li>
+            </ul>
+            <h3>Recovery flow</h3>
+            <p>
+              When a worker restarts, it loads the newest snapshot, restores the in-memory structures, and resumes consuming from the stored offset. If some events arrived after the snapshot was written, replaying from that offset catches the worker up without losing counts.
+            </p>
+            <pre><code>load latest snapshot
+restore song_counts and heap
+seek stream consumer to saved offset
+replay missed events
+resume normal processing</code></pre>
+          </section>
+
+          <section id="sliding-window" class="post-section">
+            <p class="section-label">Part 6</p>
+            <h2>Sliding Window Top K</h2>
+            <p>
+              Sliding windows are harder because counts both increase and decrease. New events enter the window, while old events leave the window and must be subtracted.
+            </p>
+            <p>
+              For example, with a 1-hour window, at 10:00 we count events in <code>[09:00, 10:00]</code>. At 10:01 the window becomes <code>[09:01, 10:01]</code>. Events from 10:00 to 10:01 are added, and events from 09:00 to 09:01 are removed.
+            </p>
+            <figure>
+              <img src="../../../Design%20Spotify%20Top%20K%20Songs/assets/3.png" alt="Sliding window offsets" />
+              <figcaption>Two offsets can represent the start and end of the active time window.</figcaption>
+            </figure>
+            <div class="two-column-code">
+              <div>
+                <h3>End offset</h3>
+                <pre><code>for event in new_events:
+  count[event.song_id] += 1</code></pre>
+              </div>
+              <div>
+                <h3>Beginning offset</h3>
+                <pre><code>for event in expired_events:
+  count[event.song_id] -= 1</code></pre>
+              </div>
+            </div>
+            <h3>Why a plain min heap is not enough</h3>
+            <p>
+              In all-time Top K, counts only increase, so a size-K min heap works well. In a sliding window, counts can decrease when events expire. If a song currently in top K drops, a song outside the heap may need to enter, but a size-K heap does not know which outside song is next. For exact sliding-window rankings, the worker needs a ranking structure over all active songs in the window, not only the current K songs.
+            </p>
+            <div class="explain-panel">
+              <h3>Event-level offset trade-off</h3>
+              <p>
+                The two-offset model is exact, but it may be expensive. If one minute contains millions of expired play events, the beginning offset must iterate through all of those events and decrement counts one by one. This is why the bucket-based approach below is usually easier to operate.
+              </p>
+            </div>
+          </section>
+
+          <section id="bucket-window" class="post-section">
+            <p class="section-label">Part 7</p>
+            <h2>Bucket-Based Exact Implementation</h2>
+            <p>
+              A more practical implementation aggregates events into fixed time buckets. For a 1-hour window with 1-minute precision, each worker keeps 60 circular buckets. Each bucket is a hash map of per-song counts for that minute.
+            </p>
+            <p>
+              The key idea is that the worker does not need to remember every raw event forever. It only needs enough information to subtract the bucket that just expired. Therefore each bucket stores <code>song_id -&gt; count_in_that_bucket</code>, not just one total number.
+            </p>
+            <pre><code>time_buckets = array[60] of HashMap&lt;song_id, count_in_bucket&gt;
+song_counts = HashMap&lt;song_id, current_window_count&gt;
+count_to_songs = TreeMap&lt;count, Set&lt;song_id&gt;&gt;</code></pre>
+            <div class="bucket-board" aria-label="Bucket-based sliding window structures">
+              <div class="bucket-column">
+                <h3>Time buckets</h3>
+                <div class="bucket-row"><b>10:00</b><span>songA: 5, songB: 2</span></div>
+                <div class="bucket-row"><b>10:01</b><span>songA: 3, songC: 4</span></div>
+                <div class="bucket-row"><b>10:02</b><span>songB: 10</span></div>
+              </div>
+              <div class="bucket-column accent-card">
+                <h3>Current counts</h3>
+                <div class="bucket-row"><b>songA</b><span>8</span></div>
+                <div class="bucket-row"><b>songB</b><span>12</span></div>
+                <div class="bucket-row"><b>songC</b><span>4</span></div>
+              </div>
+              <div class="bucket-column rank-card">
+                <h3>TreeMap ranking</h3>
+                <div class="bucket-row"><b>12</b><span>{songB}</span></div>
+                <div class="bucket-row"><b>8</b><span>{songA}</span></div>
+                <div class="bucket-row"><b>4</b><span>{songC}</span></div>
+              </div>
+            </div>
+            <h3>What each structure is responsible for</h3>
+            <div class="structure-grid">
+              <article>
+                <h4>Time buckets</h4>
+                <p>Tell us which song counts should be removed when an old minute leaves the sliding window.</p>
+              </article>
+              <article>
+                <h4>Song counts</h4>
+                <p>Tell us the current total count of each song inside the full active window.</p>
+              </article>
+              <article>
+                <h4>TreeMap ranking</h4>
+                <p>Lets us read songs from highest count to lowest count without sorting every song on each request.</p>
+              </article>
+            </div>
+            <h3>When an event arrives</h3>
+            <p>
+              The worker updates three places. First it increments the current minute bucket. Then it increments the total window count. Finally it moves the song from its old count bucket to its new count bucket in the <code>TreeMap</code>.
+            </p>
+            <pre><code>current_bucket[song_id] += 1
+
+old_count = song_counts[song_id]
+new_count = old_count + 1
+
+remove song_id from count_to_songs[old_count]
+add song_id to count_to_songs[new_count]
+song_counts[song_id] = new_count</code></pre>
+            <h3>When a bucket expires</h3>
+            <p>
+              When the clock moves forward, the circular array slot for the oldest minute is reused. Before reusing it, the worker reads every song in that bucket and subtracts those aggregate counts from the active window.
+            </p>
+            <pre><code>for song_id, expired_count in expired_bucket:
+  old_count = song_counts[song_id]
+  new_count = old_count - expired_count
+
+  remove song_id from count_to_songs[old_count]
+
+  if new_count &gt; 0:
+    add song_id to count_to_songs[new_count]
+    song_counts[song_id] = new_count
+  else:
+    remove song_id from song_counts</code></pre>
+            <h3>Concrete 3-minute example</h3>
+            <p>
+              Suppose the active window has three buckets: 10:00, 10:01, and 10:02. The current totals are <code>songA = 8</code>, <code>songB = 12</code>, and <code>songC = 4</code>. When time moves to 10:03, bucket 10:00 expires. If bucket 10:00 contains <code>songA: 5</code> and <code>songB: 2</code>, the worker updates totals to <code>songA = 3</code> and <code>songB = 10</code>, then updates the <code>TreeMap</code> ranking accordingly.
+            </p>
+            <p>
+              To read local top K, the worker scans the <code>TreeMap</code> from highest count to lowest count and stops after K songs. This avoids sorting every active song on every query.
+            </p>
+            <pre><code>for count in count_to_songs.descending_keys():
+  for song_id in count_to_songs[count]:
+    result.append({ song_id, count })
+    if len(result) == K:
+      return result</code></pre>
+            <div class="explain-panel">
+              <h3>Important trade-off</h3>
+              <p>
+                This design is exact, but it keeps state for active songs in each worker. If the number of active songs is huge, memory usage can be high. If we can tolerate small errors, approximate algorithms such as Count-Min Sketch or Space-Saving can reduce memory pressure.
+              </p>
+            </div>
+          </section>
+
+          <section id="approximate" class="post-section">
+            <p class="section-label">Part 8</p>
+            <h2>Approximate Results</h2>
+            <p>
+              If exact rankings are not required, approximate structures such as Count-Min Sketch can reduce memory and update cost. This is useful when near-real-time trends matter more than exact counts.
+            </p>
+            <ul>
+              <li>Updates and queries are close to constant time.</li>
+              <li>Memory usage is lower than exact per-song state.</li>
+              <li>Counts are upper-bound estimates, so rankings can contain small errors.</li>
+            </ul>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>

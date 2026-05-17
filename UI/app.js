@@ -8,6 +8,15 @@ const lessons = [
       "A scalable comment system with authentication, nested replies, upvotes/downvotes, moderation, cache, sharding, replication, and peak traffic handling.",
     tags: ["API Design", "MongoDB", "Redis", "Sharding", "Rate Limiting"],
   },
+  {
+    title: "Design Spotify Top K Songs",
+    status: "Completed",
+    difficulty: "Hard",
+    href: "lessons/design-spotify-top-k-songs/index.html",
+    description:
+      "A real-time ranking system for top K songs using stream partitioning, min heaps, snapshots, sliding windows, time buckets, TreeMap rankings, and approximate counters.",
+    tags: ["Top K", "Kafka", "Sliding Window", "TreeMap", "Count-Min Sketch"],
+  },
 ];
 
 const lessonGrid = document.querySelector("#lesson-grid");
